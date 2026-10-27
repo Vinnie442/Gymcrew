@@ -820,13 +820,12 @@ async function sync(quiet=true) {
   }
 }
 
+const when = r => String(r.timestamp||r.date);
+
 function recent(person,exercise) {
   return state.records
     .filter(r=>r.person===person && r.exercise===exercise)
-    .sort((a,b)=>
-      String(b.timestamp||b.date)
-        .localeCompare(String(a.timestamp||a.date))
-    )[0];
+    .reduce((last,r)=>!last || when(r)>when(last) ? r : last, undefined);
 }
 
 // Record personnel : charge la plus lourde, puis le plus de répétitions à cette charge.
@@ -906,15 +905,6 @@ function crewStats(n,ex) {
   </span>`;
 }
 
-function lastSession(person,exercise) {
-  return state.records
-    .filter(r=>r.person===person && r.exercise===exercise)
-    .sort((a,b)=>
-      String(b.timestamp||b.date)
-        .localeCompare(String(a.timestamp||a.date))
-    );
-}
-
 function nav() {
   const icons = {"train":"<path d=\"m6 8 10 8M4 6l4-2 12 14-4 2ZM3 10l4-4m10 12 4-4\"/>","group":"<circle cx=\"9\" cy=\"8\" r=\"3\"/><path d=\"M3 20v-2a6 6 0 0 1 12 0v2m1-15a3 3 0 0 1 0 6m2 3a5 5 0 0 1 3 5\"/>","programs":"<rect x=\"5\" y=\"4\" width=\"14\" height=\"17\" rx=\"2\"/><path d=\"M9 4V2h6v2M9 10h6m-6 5h6\"/>","history":"<path d=\"M4 4v16h16M7 15l4-5 4 3 5-7\"/>","poll":"<rect x=\"4\" y=\"5\" width=\"16\" height=\"16\" rx=\"2\"/><path d=\"M8 3v4m8-4v4M4 11h16m-12 5 2 2 5-4\"/>","profile":"<circle cx=\"12\" cy=\"8\" r=\"4\"/><path d=\"M4 21v-2a8 8 0 0 1 16 0v2\"/>"};
   return `<nav aria-label="Navigation principale">${[
@@ -987,9 +977,7 @@ function exerciseCard(ex,sets,range,base) {
   const todaySets = currentSets(ex);
   const myPr = personalRecord(state.name,ex);
 
-  const lastToday = todaySets.slice().sort((a,b)=>
-    String(b.timestamp||b.date).localeCompare(String(a.timestamp||a.date))
-  )[0];
+  const lastToday = todaySets.reduce((last,r)=>!last || when(r)>when(last) ? r : last, undefined);
 
   return `<div class="card focus">
     <div class="flex">
@@ -1084,6 +1072,8 @@ function training() {
         <button data-session="B">Séance B</button>
       </div>`;
   }
+
+  run(); // Nouveau jour : remet la séance (et l'exercice affiché) à zéro avant l'affichage.
 
   const idx=Math.min(
     state.exerciseIndex[state.session]||0,
@@ -1202,6 +1192,14 @@ const SERIES_COLORS=['#3987e5','#d95926','#199e70','#c98500','#d55181','#008300'
 const PG={W:340,H:200,L:36,R:70,T:12,B:24};
 let pgSeries=[], pgDates=[], pgSel=null;
 
+// Position horizontale d'une date sur la courbe (centrée s'il n'y a qu'une seule date).
+function pgX(d) {
+  const {W,L,R}=PG;
+  const t=s=>Date.parse(s+'T12:00:00');
+  const t0=t(pgDates[0]), t1=t(pgDates[pgDates.length-1]);
+  return t1===t0 ? L+(W-L-R)/2 : L+(t(d)-t0)/(t1-t0)*(W-L-R);
+}
+
 function progressSeries(ex) {
   const others=people().filter(n=>n!==state.name).sort((a,b)=>a.localeCompare(b,'fr'));
   const order=[state.name,...others].slice(0,SERIES_COLORS.length);
@@ -1230,9 +1228,7 @@ function niceStep(range) {
 function progressChart(series) {
   const {W,H,L,R,T,B}=PG;
   pgDates=[...new Set(series.flatMap(s=>s.points.map(p=>p.date)))].sort();
-  const t=d=>Date.parse(d+'T12:00:00');
-  const t0=t(pgDates[0]), t1=t(pgDates[pgDates.length-1]);
-  const x=d=>t1===t0 ? L+(W-L-R)/2 : L+(t(d)-t0)/(t1-t0)*(W-L-R);
+  const x=pgX;
 
   const kgs=series.flatMap(s=>s.points.map(p=>p.kg));
   let lo=Math.min(...kgs), hi=Math.max(...kgs);
@@ -1320,10 +1316,7 @@ function showProgressAt(i) {
   pgSel=Math.max(0,Math.min(pgDates.length-1,i));
   const d=pgDates[pgSel];
 
-  const {W,L,R}=PG;
-  const t=s=>Date.parse(s+'T12:00:00');
-  const t0=t(pgDates[0]), t1=t(pgDates[pgDates.length-1]);
-  const cx=t1===t0 ? L+(W-L-R)/2 : L+(t(d)-t0)/(t1-t0)*(W-L-R);
+  const cx=pgX(d);
   const cross=$('#pg-cross');
   cross.setAttribute('x1',cx); cross.setAttribute('x2',cx);
   cross.setAttribute('visibility','visible');
@@ -1345,11 +1338,9 @@ function bindProgress() {
   const pick=e=>{
     const box=svg.getBoundingClientRect();
     const sx=(e.clientX-box.left)/box.width*PG.W;
-    const t=s=>Date.parse(s+'T12:00:00');
-    const t0=t(pgDates[0]), t1=t(pgDates[pgDates.length-1]);
     let best=0, dist=Infinity;
     pgDates.forEach((d,i)=>{
-      const cx=t1===t0 ? 0 : PG.L+(t(d)-t0)/(t1-t0)*(PG.W-PG.L-PG.R);
+      const cx=pgX(d);
       if (Math.abs(cx-sx)<dist) { dist=Math.abs(cx-sx); best=i; }
     });
     showProgressAt(best);
@@ -1403,7 +1394,7 @@ function monthStats(person,month) {
 function leaderboard(title, rows, value, detail) {
   const medals = ['🥇','🥈','🥉'];
   return `<div class="sectionlabel">${title}</div>
-    ${rows.length ? rows.map((s,i)=>{
+    ${rows.length ? rows.map(s=>{
       const rank = rows.findIndex(x=>value(x)===value(s));
       return `<div class="crew-person">
         <span class="person-name">
@@ -1445,12 +1436,7 @@ function groupMonth() {
 }
 
 function history() {
-  const mine=state.records
-    .filter(r=>r.person===state.name)
-    .sort((a,b)=>
-      String(b.timestamp||b.date)
-        .localeCompare(String(a.timestamp||a.date))
-    );
+  const mine=state.records.filter(r=>r.person===state.name);
 
   const days=[...new Set(mine.map(r=>r.date))];
 
