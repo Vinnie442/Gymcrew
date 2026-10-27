@@ -829,6 +829,85 @@ function recent(person,exercise) {
     )[0];
 }
 
+// Record personnel : charge la plus lourde, puis le plus de répétitions à cette charge.
+function personalRecord(person,exercise) {
+  return state.records
+    .filter(r=>r.person===person && r.exercise===exercise)
+    .reduce((best,r)=>
+      !best || r.kg>best.kg || (r.kg===best.kg && r.reps>best.reps) ? r : best
+    , null);
+}
+
+// Séance en cours (par séance A/B) : point de départ, exercices passés, terminée ou non.
+// Repart de zéro chaque jour, ou quand on clique « Recommencer ».
+function run(session=state.session) {
+  state.runs ||= {};
+  const r = state.runs[session];
+  if (r && r.date === today()) return r;
+  if (r) state.exerciseIndex[session] = 0;
+  return state.runs[session] = {date:today(), start:'', skipped:[], done:false};
+}
+
+// Séries de l'utilisateur pour cet exercice dans la séance en cours.
+function currentSets(ex,session=state.session) {
+  const r = run(session);
+  const start = r.start ? Date.parse(r.start) : 0;
+  return state.records.filter(x=>
+    x.person===state.name &&
+    x.exercise===ex &&
+    x.session===session &&
+    x.date===today() &&
+    (!start || Date.parse(x.timestamp||0) > start)
+  );
+}
+
+function exerciseStatus(i,session=state.session) {
+  const [ex,sets] = PROGRAM[session][i];
+  if (currentSets(ex,session).length >= sets) return 'done';
+  if (run(session).skipped.includes(ex)) return 'skipped';
+  return 'todo';
+}
+
+// Prochain exercice à faire après idx (puis depuis le début), ou -1 si tout est fait/passé.
+function nextPending(idx,session=state.session) {
+  const n = PROGRAM[session].length;
+  for (let k=1; k<=n; k++) {
+    const i = (idx+k) % n;
+    if (exerciseStatus(i,session) === 'todo') return i;
+  }
+  return -1;
+}
+
+function finishSession() {
+  run().done = true;
+  save();
+  render();
+}
+
+function restartSession() {
+  // Départ = dernière série enregistrée (horloge du serveur), pour ne pas dépendre de l'heure du téléphone.
+  const mine = state.records
+    .filter(x=>x.person===state.name && x.session===state.session && x.date===today())
+    .map(x=>x.timestamp)
+    .sort();
+  const r = run();
+  r.start = mine.length ? mine[mine.length-1] : new Date().toISOString();
+  r.skipped = [];
+  r.done = false;
+  state.exerciseIndex[state.session] = 0;
+  save();
+  render();
+}
+
+function crewStats(n,ex) {
+  const r=recent(n,ex);
+  const pr=personalRecord(n,ex);
+  return `<span class="crew-stats">
+    <strong>${r?`${weightLabel(ex,r.kg)} × ${r.reps}`:'—'}</strong>
+    ${pr?`<small>🏆 PR ${weightLabel(ex,pr.kg)} × ${pr.reps}</small>`:''}
+  </span>`;
+}
+
 function lastSession(person,exercise) {
   return state.records
     .filter(r=>r.person===person && r.exercise===exercise)
@@ -907,12 +986,8 @@ function exerciseCard(ex,sets,range,base) {
     reps:me?.reps??Number(range.split(/[–-]/)[0])
   };
 
-  const todaySets = state.records.filter(r=>
-    r.person===state.name &&
-    r.exercise===ex &&
-    r.session===state.session &&
-    r.date===today()
-  );
+  const todaySets = currentSets(ex);
+  const myPr = personalRecord(state.name,ex);
 
   const lastToday = todaySets.slice().sort((a,b)=>
     String(b.timestamp||b.date).localeCompare(String(a.timestamp||a.date))
@@ -970,28 +1045,23 @@ function exerciseCard(ex,sets,range,base) {
     </button>
 
     <div class="muted centered">
-      ${todaySets.length} série(s) enregistrée(s) aujourd'hui ·
+      ${todaySets.length} série(s) dans cette séance ·
       Dernière charge personnelle :
       ${me?weightLabel(ex,me.kg)+' × '+me.reps:'aucune'}
+      ${myPr?`<br>🏆 Mon PR : ${weightLabel(ex,myPr.kg)} × ${myPr.reps}`:''}
     </div>
 
     <details class="crew-details"><summary>Charges du groupe <span>Voir les dernières séries</span></summary>
 
     <div class="crew-list">
-      ${names.map(n=>{
-        const r=recent(n,ex);
-
-        return `<div class="crew-person">
+      ${names.map(n=>`<div class="crew-person">
           <div class="avatar">${safe(n[0].toUpperCase())}</div>
           <span class="person-name">
             ${safe(n)}
             ${n===state.name?' <small>· moi</small>':''}
           </span>
-          <strong>
-            ${r?`${weightLabel(ex,r.kg)} × ${r.reps}`:'—'}
-          </strong>
-        </div>`;
-      }).join('')}
+          ${crewStats(n,ex)}
+        </div>`).join('')}
     </div>
     </details>
 
@@ -1029,6 +1099,40 @@ function training() {
   const msg=flash;
   flash='';
 
+  const sessionTabs = `<div class="tabs">
+    <button data-session="A"
+      class="${state.session==='A'?'active':''}">
+      Séance A
+    </button>
+    <button data-session="B"
+      class="${state.session==='B'?'active':''}">
+      Séance B
+    </button>
+  </div>`;
+
+  if (run().done) {
+    const statusLabel = {done:'✓', skipped:'⏭ passé', todo:'—'};
+    return `${msg?`<p class="notice">${safe(msg)}</p>`:''}
+    <div class="top">
+      <div>
+        <small>GYMCREW · ${safe(state.name)}</small>
+        <h1>Séance ${state.session}</h1>
+      </div>
+    </div>
+    ${sessionTabs}
+    <div class="card focus">
+      <h2>💪 Séance ${state.session} terminée</h2>
+      <div class="crew-list">
+        ${list.map(([name,s],i)=>`<div class="crew-person">
+          <span>${safe(name)}</span>
+          <strong>${currentSets(name).length} / ${s} · ${statusLabel[exerciseStatus(i)]}</strong>
+        </div>`).join('')}
+      </div>
+      <button id="restart-session" class="primary full spaced">↻ Recommencer la séance ${state.session}</button>
+      <button id="resume-session" class="outline full spaced">← Revenir à la séance</button>
+    </div>`;
+  }
+
   return `${msg?`<p class="notice">${safe(msg)}</p>`:''}
   <div class="top">
     <div>
@@ -1040,16 +1144,7 @@ function training() {
     </span>
   </div>
 
-  <div class="tabs">
-    <button data-session="A"
-      class="${state.session==='A'?'active':''}">
-      Séance A
-    </button>
-    <button data-session="B"
-      class="${state.session==='B'?'active':''}">
-      Séance B
-    </button>
-  </div>
+  ${sessionTabs}
 
   <div class="exercise-picker">
     <div class="exercise-position"><label for="pick">Ton exercice</label><span>${idx+1} <span class="muted">/ ${list.length}</span></span></div>
@@ -1057,7 +1152,7 @@ function training() {
     <select id="pick" class="field">
       ${list.map(([name],i)=>`
         <option value="${i}" ${idx===i?'selected':''}>
-          ${i+1}. ${safe(name)}
+          ${i+1}. ${safe(name)}${{done:' ✓',skipped:' ⏭',todo:''}[exerciseStatus(i)]}
         </option>
       `).join('')}
     </select>
@@ -1069,11 +1164,18 @@ function training() {
     <button class="outline" id="previous" ${idx===0?'disabled':''}>
       ← Précédent
     </button>
+    <button class="outline" id="skip">
+      ⏭ Passer
+    </button>
     <button class="primary" id="next"
       ${idx===list.length-1?'disabled':''}>
       Suivant →
     </button>
   </div>
+
+  <button class="outline full spaced" id="finish-session">
+    🏁 Terminer la séance ${state.session}
+  </button>
 
   <div class="card rest">
     <div>
@@ -1110,15 +1212,10 @@ function group() {
           <span>Ouvrir →</span>
         </button>
 
-        ${people().map(n=>{
-          const r=recent(n,ex);
-          return `<div class="crew-person">
+        ${people().map(n=>`<div class="crew-person">
             <span>${safe(n)}</span>
-            <strong>
-              ${r?`${weightLabel(ex,r.kg)} × ${r.reps}`:'—'}
-            </strong>
-          </div>`;
-        }).join('')}
+            ${crewStats(n,ex)}
+          </div>`).join('')}
       </div>
     `).join('')}
 
@@ -1412,12 +1509,7 @@ async function record() {
     return alert('Poids ou répétitions invalides');
   }
 
-  const todaySets=state.records.filter(r=>
-    r.person===state.name &&
-    r.exercise===ex &&
-    r.session===state.session &&
-    r.date===today()
-  );
+  const todaySets=currentSets(ex);
 
   const series=Math.min(todaySets.length+1,20);
 
@@ -1458,15 +1550,25 @@ async function record() {
       state.records.unshift({...row,id:crypto.randomUUID()});
     }
 
-    // Dernière série prévue : passage automatique à l'exercice suivant.
+    // Le brouillon de cet exercice est effacé dans les deux séances : la prochaine fois,
+    // A comme B repartent de la dernière série enregistrée (exercices communs).
+    delete state.draft[exKey('A',ex)];
+    delete state.draft[exKey('B',ex)];
+
+    const r=run();
+    r.skipped=r.skipped.filter(x=>x!==ex);
+
+    // Dernière série prévue : passage automatique au prochain exercice non fait.
     const list=PROGRAM[state.session];
     const idx=state.exerciseIndex[state.session];
 
     if (series===sets) {
-      if (idx<list.length-1) {
-        state.exerciseIndex[state.session]=idx+1;
-        flash=`✓ ${ex} terminé · au tour de ${list[idx+1][0]}`;
+      const next=nextPending(idx);
+      if (next>=0) {
+        state.exerciseIndex[state.session]=next;
+        flash=`✓ ${ex} terminé · au tour de ${list[next][0]}`;
       } else {
+        r.done=true;
         flash=`💪 Séance ${state.session} terminée !`;
       }
     }
@@ -1777,6 +1879,49 @@ function bind() {
 
   const r=$('#record');
   if (r) r.onclick=record;
+
+  const skip=$('#skip');
+  if (skip) {
+    skip.onclick=()=>{
+      captureDraft();
+      const idx=state.exerciseIndex[state.session];
+      const ex=PROGRAM[state.session][idx][0];
+      const cur=run();
+      if (!cur.skipped.includes(ex)) cur.skipped.push(ex);
+      const next=nextPending(idx);
+      if (next>=0) {
+        state.exerciseIndex[state.session]=next;
+        flash=`⏭ ${ex} passé · au tour de ${PROGRAM[state.session][next][0]}`;
+      } else {
+        cur.done=true;
+        flash=`⏭ ${ex} passé · séance ${state.session} terminée`;
+      }
+      save();
+      render();
+    };
+  }
+
+  const finish=$('#finish-session');
+  if (finish) {
+    finish.onclick=()=>{
+      captureDraft();
+      const left=PROGRAM[state.session].filter((_,i)=>exerciseStatus(i)==='todo').length;
+      if (left && !confirm(`Il reste ${left} exercice(s). Terminer quand même ?`)) return;
+      finishSession();
+    };
+  }
+
+  const restart=$('#restart-session');
+  if (restart) restart.onclick=restartSession;
+
+  const resume=$('#resume-session');
+  if (resume) {
+    resume.onclick=()=>{
+      run().done=false;
+      save();
+      render();
+    };
+  }
 
   bindProgress();
 

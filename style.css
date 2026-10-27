@@ -47,3 +47,6 @@ nav{background:rgba(13,23,38,.97);border-top:1px solid #2a3b4f;padding:8px max(8
 nav button{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;min-height:56px;max-width:100px;border-radius:13px;font-size:10px;color:#879bb2;position:relative;padding:7px 0;line-height:1.2}nav svg{width:21px;height:21px}nav button.active{background:#1d3936;color:#86efc3}nav button.active:before{content:'';position:absolute;top:0;width:16px;height:2px;background:var(--accent);border-radius:3px}
 @media(max-width:380px){main{padding-left:12px;padding-right:12px}.focus{padding:16px}.focus h2{font-size:21px}.stepper input{font-size:24px}.stepper button{min-width:32px;padding-left:7px;padding-right:7px}nav button{font-size:9px}.rest{flex-wrap:wrap}}
 @media(prefers-reduced-motion:reduce){button{transition:none!important}}
+.next button{flex:1;padding:12px 8px}
+.crew-stats{margin-left:auto;display:flex;flex-direction:column;align-items:flex-end;gap:2px;text-align:right}
+.crew-stats small{color:var(--accent);font-size:11px;white-space:nowrap}
