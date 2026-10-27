@@ -1,0 +1,15 @@
+# GymCrew — à placer dans a7xkroqqw9/ sur OVH.
+# Si un .htaccess existe déjà sur le serveur, ajouter ces lignes à la fin au lieu de le remplacer.
+
+# Toujours utiliser HTTPS (sinon page modifiable en transit et comptes séparés http/https).
+RewriteEngine On
+RewriteCond %{SERVER_PORT} 80
+RewriteRule ^(.*)$ https://%{HTTP_HOST}/$1 [R=301,L]
+
+<IfModule mod_headers.c>
+  Header always set Strict-Transport-Security "max-age=31536000"
+  Header always set X-Content-Type-Options "nosniff"
+  Header always set Referrer-Policy "strict-origin-when-cross-origin"
+  # Seuls les scripts du site et l'API Supabase sont autorisés ; empêche l'intégration dans un autre site.
+  Header always set Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://gileskjacjjrswbvpwiz.supabase.co; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+</IfModule>
