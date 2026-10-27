@@ -845,7 +845,7 @@ function run(session=state.session) {
   const r = state.runs[session];
   if (r && r.date === today()) return r;
   if (r) state.exerciseIndex[session] = 0;
-  return state.runs[session] = {date:today(), start:'', skipped:[], done:false};
+  return state.runs[session] = {date:today(), start:'', skipped:[]};
 }
 
 // Séries de l'utilisateur pour cet exercice dans la séance en cours.
@@ -878,13 +878,14 @@ function nextPending(idx,session=state.session) {
   return -1;
 }
 
-function finishSession() {
-  run().done = true;
-  save();
-  render();
-}
+// Tous les exercices sont faits ou passés : récapitulatif, puis la séance repart de zéro.
+function completeSession() {
+  const list = PROGRAM[state.session];
+  const done = list.filter((_,i)=>exerciseStatus(i)==='done').length;
+  const skipped = list.length - done;
+  flash = `💪 Séance ${state.session} terminée : ${done} exercice(s) fait(s)`
+    + (skipped ? `, ${skipped} passé(s)` : '') + '. Prête pour la prochaine fois.';
 
-function restartSession() {
   // Départ = dernière série enregistrée (horloge du serveur), pour ne pas dépendre de l'heure du téléphone.
   const mine = state.records
     .filter(x=>x.person===state.name && x.session===state.session && x.date===today())
@@ -893,10 +894,7 @@ function restartSession() {
   const r = run();
   r.start = mine.length ? mine[mine.length-1] : new Date().toISOString();
   r.skipped = [];
-  r.done = false;
   state.exerciseIndex[state.session] = 0;
-  save();
-  render();
 }
 
 function crewStats(n,ex) {
@@ -1110,29 +1108,6 @@ function training() {
     </button>
   </div>`;
 
-  if (run().done) {
-    const statusLabel = {done:'✓', skipped:'⏭ passé', todo:'—'};
-    return `${msg?`<p class="notice">${safe(msg)}</p>`:''}
-    <div class="top">
-      <div>
-        <small>GYMCREW · ${safe(state.name)}</small>
-        <h1>Séance ${state.session}</h1>
-      </div>
-    </div>
-    ${sessionTabs}
-    <div class="card focus">
-      <h2>💪 Séance ${state.session} terminée</h2>
-      <div class="crew-list">
-        ${list.map(([name,s],i)=>`<div class="crew-person">
-          <span>${safe(name)}</span>
-          <strong>${currentSets(name).length} / ${s} · ${statusLabel[exerciseStatus(i)]}</strong>
-        </div>`).join('')}
-      </div>
-      <button id="restart-session" class="primary full spaced">↻ Recommencer la séance ${state.session}</button>
-      <button id="resume-session" class="outline full spaced">← Revenir à la séance</button>
-    </div>`;
-  }
-
   return `${msg?`<p class="notice">${safe(msg)}</p>`:''}
   <div class="top">
     <div>
@@ -1172,10 +1147,6 @@ function training() {
       Suivant →
     </button>
   </div>
-
-  <button class="outline full spaced" id="finish-session">
-    🏁 Terminer la séance ${state.session}
-  </button>
 
   <div class="card rest">
     <div>
@@ -1394,6 +1365,85 @@ function bindProgress() {
   if (pgSel!==null) showProgressAt(pgSel);
 }
 
+// Classement du groupe pour le mois en cours : assiduité, plus grosse progression, records battus.
+function monthStats(person,month) {
+  const mine = state.records
+    .filter(r=>r.person===person)
+    .sort((a,b)=>String(a.timestamp||a.date).localeCompare(String(b.timestamp||b.date)));
+
+  const days = new Set(mine.filter(r=>r.date.startsWith(month)).map(r=>r.date)).size;
+
+  // Record battu : charge supérieure à toutes les séries précédentes du même exercice
+  // (compté une fois par exercice et par jour).
+  const max = {}, prs = new Set();
+  // Progression : meilleure charge du mois comparée à la meilleure charge d'avant le mois.
+  const ex = {};
+
+  for (const r of mine) {
+    const inMonth = r.date.startsWith(month);
+    if (inMonth && max[r.exercise] > 0 && r.kg > max[r.exercise]) prs.add(r.date+'|'+r.exercise);
+    max[r.exercise] = Math.max(max[r.exercise] ?? 0, r.kg);
+
+    const e = ex[r.exercise] ||= {before:0, now:0};
+    if (inMonth) e.now = Math.max(e.now, r.kg);
+    else if (r.date < month) e.before = Math.max(e.before, r.kg);
+  }
+
+  let best = null;
+  for (const [name,e] of Object.entries(ex)) {
+    if (e.before > 0 && e.now > e.before) {
+      const pct = (e.now - e.before) / e.before;
+      if (!best || pct > best.pct) best = {name, pct, from:e.before, to:e.now};
+    }
+  }
+
+  return {person, days, prs:prs.size, best};
+}
+
+function leaderboard(title, rows, value, detail) {
+  const medals = ['🥇','🥈','🥉'];
+  return `<div class="sectionlabel">${title}</div>
+    ${rows.length ? rows.map((s,i)=>{
+      const rank = rows.findIndex(x=>value(x)===value(s));
+      return `<div class="crew-person">
+        <span class="person-name">
+          ${medals[rank] || `<small>${rank+1}.</small>`}
+          ${safe(s.person)}${s.person===state.name?' <small>· moi</small>':''}
+        </span>
+        <span class="crew-stats">
+          <strong>${value(s)}</strong>
+          ${detail ? `<small class="wrap">${detail(s)}</small>` : ''}
+        </span>
+      </div>`;
+    }).join('') : '<p class="muted">Personne pour l’instant.</p>'}`;
+}
+
+function groupMonth() {
+  const month = today().slice(0,7);
+  const monthName = new Date().toLocaleDateString('fr-FR',{month:'long'});
+  const stats = people().map(n=>monthStats(n,month));
+  const plural = (n,w) => `${n} ${w}${n>1?'s':''}`;
+
+  return `<div class="card">
+    <h3>Le groupe en ${monthName}</h3>
+
+    ${leaderboard('🔥 ASSIDUITÉ',
+      stats.slice().sort((a,b)=>b.days-a.days),
+      s=>plural(s.days,'séance'))}
+
+    ${leaderboard('📈 PLUS GROSSE PROGRESSION',
+      stats.filter(s=>s.best).sort((a,b)=>b.best.pct-a.best.pct),
+      s=>`+${Math.round(s.best.pct*100)} %`,
+      s=>`${safe(s.best.name)} · ${s.best.from} → ${s.best.to} kg`)}
+
+    ${leaderboard('🏆 RECORDS BATTUS',
+      stats.filter(s=>s.prs).sort((a,b)=>b.prs-a.prs),
+      s=>plural(s.prs,'record'))}
+
+    <p class="muted">La progression compare la meilleure charge du mois à celle des mois précédents.</p>
+  </div>`;
+}
+
 function history() {
   const mine=state.records
     .filter(r=>r.person===state.name)
@@ -1410,29 +1460,9 @@ function history() {
       <strong>${days.length}</strong> jours d'entraînement
     </div>
 
-    ${progressCard()}
+    ${groupMonth()}
 
-    ${days.length
-      ?days.map(d=>`
-        <div class="card">
-          <h3>${fmt(d)}</h3>
-          ${mine.filter(r=>r.date===d).map(r=>`
-            <div class="crew-person">
-              <span>
-                ${safe(r.exercise)}
-                <small>· ${r.series}</small>
-              </span>
-              <strong>${r.kg} kg × ${r.reps}</strong>
-              ${canDeleteSet(r)
-                ?`<button class="outline" style="padding:4px 9px" data-delete-set="${safe(r.id)}" aria-label="Supprimer cette série">✕</button>`
-                :''}
-            </div>
-          `).join('')}
-        </div>
-      `).join('')
-      :'<div class="card">Aucune série enregistrée.</div>'}
-
-    `;
+    ${mine.length ? progressCard() : '<div class="card">Aucune série enregistrée.</div>'}`;
 }
 
 function profile() {
@@ -1568,8 +1598,7 @@ async function record() {
         state.exerciseIndex[state.session]=next;
         flash=`✓ ${ex} terminé · au tour de ${list[next][0]}`;
       } else {
-        r.done=true;
-        flash=`💪 Séance ${state.session} terminée !`;
+        completeSession();
       }
     }
 
@@ -1893,31 +1922,8 @@ function bind() {
         state.exerciseIndex[state.session]=next;
         flash=`⏭ ${ex} passé · au tour de ${PROGRAM[state.session][next][0]}`;
       } else {
-        cur.done=true;
-        flash=`⏭ ${ex} passé · séance ${state.session} terminée`;
+        completeSession();
       }
-      save();
-      render();
-    };
-  }
-
-  const finish=$('#finish-session');
-  if (finish) {
-    finish.onclick=()=>{
-      captureDraft();
-      const left=PROGRAM[state.session].filter((_,i)=>exerciseStatus(i)==='todo').length;
-      if (left && !confirm(`Il reste ${left} exercice(s). Terminer quand même ?`)) return;
-      finishSession();
-    };
-  }
-
-  const restart=$('#restart-session');
-  if (restart) restart.onclick=restartSession;
-
-  const resume=$('#resume-session');
-  if (resume) {
-    resume.onclick=()=>{
-      run().done=false;
       save();
       render();
     };

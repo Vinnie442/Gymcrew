@@ -1,5 +1,5 @@
-const CACHE = 'gymcrew-v17';
-const ASSETS = ['./', './index.html', './style.css?v=16', './app.js?v=17', './manifest.webmanifest', './icon.svg', './config.js', './push.js', './push-config.js'];
+const CACHE = 'gymcrew-v18';
+const ASSETS = ['./', './index.html', './style.css?v=17', './app.js?v=18', './manifest.webmanifest', './icon.svg', './config.js', './push.js', './push-config.js'];
 // skipWaiting : la nouvelle version (avec la réception des notifications) remplace
 // l'ancienne immédiatement, sans attendre la fermeture complète de l'application.
 self.addEventListener('install', event => {
